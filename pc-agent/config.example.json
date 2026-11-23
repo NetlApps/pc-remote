@@ -1,0 +1,6 @@
+{
+  "port": 8765,
+  "discovery_port": 8766,
+  "session_port": 8767,
+  "token": ""
+}

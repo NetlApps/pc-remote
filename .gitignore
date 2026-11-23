@@ -1,0 +1,14 @@
+# Секреты и локальные данные
+pc-agent/config.json
+pc-agent/*.log
+pc-agent/__pycache__/
+android/keystore/
+android/build/
+PcRemote.apk
+PcRemote.apk.idsig
+PcRemote.zip
+*.part
+
+# Системный мусор
+Thumbs.db
+.DS_Store
