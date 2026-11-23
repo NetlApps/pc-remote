@@ -106,7 +106,7 @@
     confirmOpen: false,
     appVisible: true,
     pollTimer: null,
-    currentVersion: '1.1.0',
+    currentVersion: '1.1.1',
     currentVersionCode: 0,
     shotOpen: false,
     shotBusy: false,
@@ -1764,7 +1764,7 @@
     refreshNetworkInfo();
 
     try {
-      state.currentVersion = Bridge.getVersion() || '1.1.0';
+      state.currentVersion = Bridge.getVersion() || '1.1.1';
       state.currentVersionCode = Number(Bridge.getVersionCode() || 0) || 0;
       els.appVersion.textContent = state.currentVersion;
     } catch (error) {

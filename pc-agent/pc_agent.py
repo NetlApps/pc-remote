@@ -31,7 +31,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, urlencode, urlsplit
 from urllib.request import Request, urlopen
 
-APP_VERSION = "1.1.0"
+APP_VERSION = "1.1.1"
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
 LOG_PATH = os.path.join(BASE_DIR, "pc_agent.log")
@@ -178,6 +178,33 @@ def load_config():
 
 
 def detect_primary_ip():
+    # UDP-трюк с 8.8.8.8 выбирает маршрут по умолчанию и может вернуть адрес
+    # VPN-туннеля. Для телефона нужен адрес физического LAN-адаптера.
+    if IS_WINDOWS:
+        command = (
+            "$a = Get-NetAdapter -Physical -ErrorAction SilentlyContinue | "
+            "Where-Object { $_.Status -eq 'Up' -and "
+            "$_.InterfaceDescription -notmatch 'Bluetooth|Wintun|Virtual|VPN' } | "
+            "Sort-Object ifIndex | Select-Object -First 1; "
+            "if ($a) { Get-NetIPAddress -InterfaceIndex $a.ifIndex -AddressFamily IPv4 "
+            "-ErrorAction SilentlyContinue | "
+            "Where-Object { $_.IPAddress -notlike '169.254.*' -and $_.IPAddress -ne '127.0.0.1' } | "
+            "Select-Object -First 1 -ExpandProperty IPAddress }"
+        )
+        try:
+            result = subprocess.run(
+                ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", command],
+                capture_output=True,
+                text=True,
+                timeout=12,
+                creationflags=CREATE_NO_WINDOW,
+            )
+            lines = [line.strip() for line in (result.stdout or "").splitlines() if line.strip()]
+            ip = lines[-1] if lines else ""
+            if re.fullmatch(r"(\d{1,3}\.){3}\d{1,3}", ip) and not ip.startswith("127."):
+                return ip
+        except Exception as error:  # noqa: BLE001 — диагностика не должна ронять агент
+            log.debug("Не удалось определить IP через PowerShell: %s", error)
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
         sock.connect(("8.8.8.8", 80))
