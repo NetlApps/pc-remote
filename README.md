@@ -205,6 +205,7 @@ powershell -ExecutionPolicy Bypass -File .\pc-agent\agent-info.ps1
 | Нет звука/медиа/скриншота | Задача `PCRemoteHelper` работает? Пользователь в интерактивной сессии? |
 | Bluetooth-кнопка недоступна | Откройте «Bluetooth Audio Receiver» на ПК и выберите телефон в списке |
 | Не скачивается обновление | Интернет на телефоне, доступ к GitHub, разрешение на установку APK |
+| ПК не отвечает при включённом VPN | См. раздел «Если на ПК включён VPN (WG Tunnel)» ниже |
 
 Быстрая проверка с ПК:
 
@@ -212,6 +213,32 @@ powershell -ExecutionPolicy Bypass -File .\pc-agent\agent-info.ps1
 $cfg = Get-Content .\pc-agent\config.json -Raw | ConvertFrom-Json
 Invoke-RestMethod "http://127.0.0.1:8765/status" -Headers @{ 'X-Auth-Token' = $cfg.token } | ConvertTo-Json -Depth 4
 ```
+
+## Если на ПК включён VPN (WG Tunnel)
+
+WG Tunnel 2.4.x при поднятом туннеле блокирует весь входящий и исходящий
+трафик локальной сети через WFP. Телефон не достучится до агента, даже если
+брандмауэр Windows разрешает порт 8765.
+
+Установщик добавляет отдельное разрешение WFP:
+
+- входящий **TCP 8765** — HTTP-команды;
+- входящий **UDP 8766** — поиск ПК в сети;
+- только из частных адресов: `192.168.0.0/16`, `10.0.0.0/8`, `172.16.0.0/12`.
+
+Разрешение живёт в собственной WFP-подслойке с весом `65535` — выше, чем у
+WG Tunnel (`65514`), поэтому проверяется раньше блокировки. Настройки и
+фильтры WG Tunnel не изменяются, туннель продолжает работать.
+
+Проверить или удалить разрешение:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\pc-agent\wfp-lan-permit.ps1 -Action Status
+powershell -ExecutionPolicy Bypass -File .\pc-agent\wfp-lan-permit.ps1 -Action Remove
+```
+
+Скрипт нужно запускать от имени администратора. Если WG Tunnel обновится и
+изменит вес своей подслойки, просто запустите установщик агента ещё раз.
 
 ## Пересборка APK и релиз
 

@@ -37,6 +37,16 @@ foreach ($ruleName in @('PC Remote Agent (TCP)', 'PC Remote Agent (UDP)', 'PC Re
   }
 }
 
+$wfpScript = Join-Path $PSScriptRoot 'wfp-lan-permit.ps1'
+if (Test-Path $wfpScript) {
+  try {
+    & $wfpScript -Action Remove | Out-Null
+    Write-Host 'Разрешение WFP для WG Tunnel удалено'
+  } catch {
+    Write-Host ('Не удалось удалить разрешение WFP: ' + $_.Exception.Message) -ForegroundColor Yellow
+  }
+}
+
 $agentPath = Join-Path $PSScriptRoot 'pc_agent.py'
 $sessionHelperPath = Join-Path $PSScriptRoot 'session_helper.py'
 Get-CimInstance Win32_Process -Filter "Name = 'python.exe' OR Name = 'pythonw.exe'" -ErrorAction SilentlyContinue |

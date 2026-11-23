@@ -30,6 +30,7 @@ try {
     'session_helper.py',
     'install-agent.ps1',
     'uninstall-agent.ps1',
+    'wfp-lan-permit.ps1',
     'agent-info.ps1',
     'setup.cmd',
     'remove-agent.cmd',

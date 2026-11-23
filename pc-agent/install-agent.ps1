@@ -100,7 +100,14 @@ if (Get-ScheduledTask -TaskName $helperTaskName -ErrorAction SilentlyContinue) {
   Unregister-ScheduledTask -TaskName $helperTaskName -Confirm:$false -ErrorAction SilentlyContinue
 }
 Get-CimInstance Win32_Process -Filter "Name = 'python.exe' OR Name = 'pythonw.exe'" -ErrorAction SilentlyContinue |
-  Where-Object { $_.CommandLine -and ($_.CommandLine.Contains($agentPath) -or $_.CommandLine.Contains($sessionHelperPath)) } |
+  Where-Object {
+    $_.CommandLine -and (
+      $_.CommandLine.Contains($agentPath) -or
+      $_.CommandLine.Contains($sessionHelperPath) -or
+      $_.CommandLine -match '(^|[\\/"\s])pc_agent\.py' -or
+      $_.CommandLine -match '(^|[\\/"\s])session_helper\.py'
+    )
+  } |
   ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 Start-Sleep -Milliseconds 700
 
@@ -215,6 +222,22 @@ New-NetFirewallRule `
   -LocalPort $discoveryPort `
   -Profile Any `
   -RemoteAddress LocalSubnet | Out-Null
+
+# --- Разрешение для WG Tunnel --------------------------------------------
+
+# WG Tunnel ставит WFP-блокировку всего входящего трафика. Разрешение
+# добавляется отдельным WFP-фильтром с более высоким весом и не меняет
+# настройки самого WG Tunnel.
+$wfpScript = Join-Path $dir 'wfp-lan-permit.ps1'
+if (Test-Path $wfpScript) {
+  Write-Host 'Добавляю разрешение для WG Tunnel (если он установлен)…'
+  try {
+    & $wfpScript -Action Add | Out-Null
+    Write-Host '  Разрешение для локальной сети добавлено.' -ForegroundColor Green
+  } catch {
+    Write-Host ('  Не удалось добавить разрешение WFP: ' + $_.Exception.Message) -ForegroundColor Yellow
+  }
+}
 
 # --- Запуск и проверка ----------------------------------------------------
 
