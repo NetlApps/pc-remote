@@ -187,7 +187,12 @@
 
       <button id="monitorBtn" class="tool" type="button" data-session>
         <span class="tool-icon indigo">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <svg id="monitorIconOn" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="4.5" width="18" height="12" rx="2"></rect>
+            <path d="M9 20h6"></path>
+            <path d="M12 16.5V20"></path>
+          </svg>
+          <svg id="monitorIconOff" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" hidden>
             <rect x="3" y="4.5" width="18" height="12" rx="2"></rect>
             <path d="M9 20h6"></path>
             <path d="M12 16.5V20"></path>
@@ -195,7 +200,7 @@
           </svg>
         </span>
         <span class="tool-title">Монитор</span>
-        <span class="tool-sub">выключить экран</span>
+        <span id="monitorSub" class="tool-sub">Выключить монитор</span>
       </button>
 
       <button id="appsBtn" class="tool" type="button" data-session>

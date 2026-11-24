@@ -111,6 +111,16 @@
     shotOpen: false,
     shotBusy: false,
     shotData: null,
+    monitor: {
+      known: false,
+      on: true,
+      explicitOff: false,
+      idleSeconds: 0,
+      timeoutSeconds: 900,
+      checking: false,
+      busy: false,
+      lastAt: 0,
+    },
     appsOpen: false,
     appsBusy: false,
     apps: [],
@@ -488,6 +498,9 @@
       if (sessionReady() && Date.now() - state.bt.lastAt > 45000) {
         refreshBt(false);
       }
+      if (sessionReady() && !state.monitor.known) {
+        refreshMonitorState({ silent: true });
+      }
     } catch (error) {
       state.online = false;
       state.info = null;
@@ -603,6 +616,7 @@
 
     renderBt();
     renderUpdate();
+    renderMonitor();
   }
 
   function formatUptime(seconds) {
@@ -853,10 +867,71 @@
     els.shotMonitorOff.disabled = state.shotBusy || !state.shotData;
   }
 
-  async function monitorOff() {
-    const result = await command('/monitor_off', {}, { timeout: 12000 });
-    if (result) {
-      setTimeout(closeScreenshot, 500);
+  async function refreshMonitorState(options = {}) {
+    if (!sessionReady()) {
+      state.monitor.known = false;
+      renderMonitor();
+      return null;
+    }
+    if (state.monitor.checking && !options.force) return null;
+    state.monitor.checking = true;
+    try {
+      const data = await apiRequest(state.settings, '/monitor_state');
+      state.monitor.known = true;
+      state.monitor.on = Boolean(data.monitor_on);
+      state.monitor.explicitOff = Boolean(data.explicit_off);
+      state.monitor.idleSeconds = Number(data.idle_seconds) || 0;
+      state.monitor.timeoutSeconds = Number(data.timeout_seconds) || 900;
+      state.monitor.lastAt = Date.now();
+      return data;
+    } catch (error) {
+      return null;
+    } finally {
+      state.monitor.checking = false;
+      renderMonitor();
+    }
+  }
+
+  function renderMonitor() {
+    if (!els.monitorBtn) return;
+    const off = state.monitor.known && !state.monitor.on;
+    els.monitorSub.textContent = off ? 'Включить монитор' : 'Выключить монитор';
+    els.monitorIconOn.hidden = off;
+    els.monitorIconOff.hidden = !off;
+    els.monitorBtn.classList.toggle('monitor-off', off);
+    els.monitorBtn.disabled = !sessionReady() || state.monitor.busy;
+    if (els.shotMonitorOff) {
+      els.shotMonitorOff.textContent = off ? 'Включить монитор' : 'Выключить монитор';
+    }
+  }
+
+  async function toggleMonitor() {
+    if (state.monitor.busy) return;
+    state.monitor.busy = true;
+    renderMonitor();
+    try {
+      if (!state.monitor.known || Date.now() - state.monitor.lastAt > 12000) {
+        await refreshMonitorState({ silent: true, force: true });
+      }
+      const turningOff = state.monitor.known ? state.monitor.on : true;
+      const result = await command(
+        turningOff ? '/monitor_off' : '/monitor_on',
+        {},
+        { timeout: 12000, silent: true }
+      );
+      if (result) {
+        state.monitor.known = true;
+        state.monitor.on = !turningOff;
+        state.monitor.explicitOff = turningOff;
+        state.monitor.lastAt = Date.now();
+        showToast(turningOff ? 'Монитор выключен' : 'Монитор включён', '', 1800);
+        vibrate(18);
+        if (turningOff && state.shotOpen) setTimeout(closeScreenshot, 500);
+        refreshMonitorState({ silent: true, force: true });
+      }
+    } finally {
+      state.monitor.busy = false;
+      renderMonitor();
     }
   }
 
@@ -1553,6 +1628,9 @@
       'appVersion',
       'screenshotBtn',
       'monitorBtn',
+      'monitorSub',
+      'monitorIconOn',
+      'monitorIconOff',
       'appsBtn',
       'hotkeysBtn',
       'muteBtn',
@@ -1633,14 +1711,14 @@
     els.muteBtn.addEventListener('click', toggleMute);
 
     els.screenshotBtn.addEventListener('click', openScreenshot);
-    els.monitorBtn.addEventListener('click', monitorOff);
+    els.monitorBtn.addEventListener('click', toggleMonitor);
     els.appsBtn.addEventListener('click', openAppsSheet);
     els.hotkeysBtn.addEventListener('click', openHotkeysSheet);
 
     els.shotClose.addEventListener('click', closeScreenshot);
     els.shotBackdrop.addEventListener('click', closeScreenshot);
     els.shotRefresh.addEventListener('click', loadScreenshot);
-    els.shotMonitorOff.addEventListener('click', monitorOff);
+    els.shotMonitorOff.addEventListener('click', toggleMonitor);
 
     els.closeApps.addEventListener('click', closeAppsSheet);
     els.appsBackdrop.addEventListener('click', closeAppsSheet);
@@ -1720,6 +1798,7 @@
     document.addEventListener('visibilitychange', () => {
       if (!document.hidden && state.appVisible && state.settings.ip && state.settings.token) {
         refreshStatus({ silent: true });
+        refreshMonitorState({ silent: true });
       }
     });
   }
@@ -1727,7 +1806,10 @@
   window.__onAppResume = () => {
     state.appVisible = true;
     refreshNetworkInfo();
-    if (state.settings.ip && state.settings.token) refreshStatus({ silent: true });
+    if (state.settings.ip && state.settings.token) {
+      refreshStatus({ silent: true });
+      refreshMonitorState({ silent: true });
+    }
   };
 
   window.__onAppPause = () => {
@@ -1782,6 +1864,7 @@
     state.pollTimer = setInterval(() => {
       if (!state.appVisible || document.hidden || state.busy) return;
       refreshStatus({ silent: true });
+      refreshMonitorState({ silent: true });
     }, 10000);
 
     if (hasNativeBridge && Date.now() - loadUpdateCheckTime() > 6 * 60 * 60 * 1000) {

@@ -31,7 +31,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, urlencode, urlsplit
 from urllib.request import Request, urlopen
 
-APP_VERSION = "1.1.1"
+APP_VERSION = "1.1.2"
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
 LOG_PATH = os.path.join(BASE_DIR, "pc_agent.log")
@@ -604,11 +604,16 @@ class AgentHandler(BaseHTTPRequestHandler):
             self.proxy("GET", "/apps?" + suffix, timeout=30)
             return
 
+        if path == "/monitor_state" and method == "GET":
+            self.proxy("GET", "/monitor_state", timeout=12)
+            return
+
         if method == "POST" and path in (
             "/volume",
             "/media",
             "/hotkey",
             "/monitor_off",
+            "/monitor_on",
             "/launch",
             "/bt",
         ):
@@ -622,6 +627,7 @@ class AgentHandler(BaseHTTPRequestHandler):
                 "/media": 12,
                 "/hotkey": 12,
                 "/monitor_off": 12,
+                "/monitor_on": 12,
                 "/launch": 20,
                 "/bt": 40,
             }

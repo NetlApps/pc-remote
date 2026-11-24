@@ -21,7 +21,7 @@ Write-Host ''
 Write-Host '  Удаление агента «ПК Пульт»' -ForegroundColor Cyan
 Write-Host ''
 
-foreach ($taskName in @('PCRemoteAgent', 'PCRemoteLock', 'PCRemoteHelper')) {
+foreach ($taskName in @('PCRemoteAgent', 'PCRemoteLock', 'PCRemoteHelper', 'PCRemoteLanGuard')) {
   if (Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue) {
     Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
     Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue
@@ -37,14 +37,19 @@ foreach ($ruleName in @('PC Remote Agent (TCP)', 'PC Remote Agent (UDP)', 'PC Re
   }
 }
 
-$wfpScript = Join-Path $PSScriptRoot 'wfp-lan-permit.ps1'
-if (Test-Path $wfpScript) {
+# Чистим объекты WFP от старых версий установщика (до 1.1.2).
+$legacyWfp = Join-Path $PSScriptRoot 'wfp-lan-permit.ps1'
+if (Test-Path $legacyWfp) {
   try {
-    & $wfpScript -Action Remove | Out-Null
-    Write-Host 'Разрешение WFP для WG Tunnel удалено'
+    & $legacyWfp -Action Remove | Out-Null
+    Write-Host 'Старое разрешение WFP для WG Tunnel удалено'
   } catch {
-    Write-Host ('Не удалось удалить разрешение WFP: ' + $_.Exception.Message) -ForegroundColor Yellow
+    Write-Host ('Не удалось удалить старое разрешение WFP: ' + $_.Exception.Message) -ForegroundColor Yellow
   }
+}
+$guardLog = Join-Path $PSScriptRoot 'lan_guard.log'
+if (Test-Path $guardLog) {
+  Remove-Item -LiteralPath $guardLog -Force -ErrorAction SilentlyContinue
 }
 
 $agentPath = Join-Path $PSScriptRoot 'pc_agent.py'

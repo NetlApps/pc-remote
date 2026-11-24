@@ -27,11 +27,12 @@ import subprocess
 import sys
 import threading
 import time
+import uuid
 import zlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 
-APP_VERSION = "1.1.1"
+APP_VERSION = "1.1.2"
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
 LOG_PATH = os.path.join(BASE_DIR, "session_helper.log")
@@ -301,18 +302,196 @@ def send_hotkey(combo):
     return True, "Горячие клавиши отправлены"
 
 
+HWND_BROADCAST = 0xFFFF
+WM_SYSCOMMAND = 0x0112
+SC_MONITORPOWER = 0xF170
+MOUSEEVENTF_MOVE = 0x0001
+ES_CONTINUOUS = 0x80000000
+ES_DISPLAY_REQUIRED = 0x00000002
+
+MONITOR_LOCK = threading.Lock()
+MONITOR_STATE = {
+    "off_at": 0.0,
+    "on_at": 0.0,
+    "timeout": 900,
+    "timeout_at": 0.0,
+}
+
+
+class _GUID(ctypes.Structure):
+    _fields_ = [
+        ("Data1", ctypes.c_ulong),
+        ("Data2", ctypes.c_ushort),
+        ("Data3", ctypes.c_ushort),
+        ("Data4", ctypes.c_ubyte * 8),
+    ]
+
+
+class _LASTINPUTINFO(ctypes.Structure):
+    _fields_ = [("cbSize", ctypes.c_uint), ("dwTime", ctypes.c_uint)]
+
+
+def _guid(value):
+    return _GUID.from_buffer_copy(uuid.UUID(value).bytes_le)
+
+
+POWER_VIDEO_SUBGROUP = _guid("7516b95f-f776-4464-8c53-06167f40cc99")
+POWER_VIDEO_TIMEOUT = _guid("3c0bc021-c8a8-4e07-a973-6b14cbcb2b7e")
+
+
+def monitor_idle_seconds():
+    """Сколько секунд прошло с последнего ввода пользователя."""
+    if not user32:
+        return 0.0
+    try:
+        info = _LASTINPUTINFO()
+        info.cbSize = ctypes.sizeof(info)
+        if not user32.GetLastInputInfo(ctypes.byref(info)):
+            return 0.0
+        kernel32 = ctypes.windll.kernel32
+        kernel32.GetTickCount64.restype = ctypes.c_ulonglong
+        current = int(kernel32.GetTickCount64()) & 0xFFFFFFFF
+        elapsed = (current - int(info.dwTime)) & 0xFFFFFFFF
+        return elapsed / 1000.0
+    except Exception:  # noqa: BLE001
+        return 0.0
+
+
+def monitor_timeout_seconds():
+    """Таймаут отключения экрана из активной схемы питания (или 15 минут)."""
+    now = time.time()
+    with MONITOR_LOCK:
+        cached_at = float(MONITOR_STATE["timeout_at"])
+        cached = int(MONITOR_STATE["timeout"])
+    if cached_at and now - cached_at < 120:
+        return cached
+
+    timeout = 900
+    scheme = ctypes.POINTER(_GUID)()
+    try:
+        powr = ctypes.windll.powrprof
+        powr.PowerGetActiveScheme.restype = ctypes.c_ulong
+        powr.PowerGetActiveScheme.argtypes = [
+            ctypes.c_void_p,
+            ctypes.POINTER(ctypes.POINTER(_GUID)),
+        ]
+        for reader in (powr.PowerReadACValue, powr.PowerReadDCValue):
+            reader.restype = ctypes.c_ulong
+            reader.argtypes = [
+                ctypes.c_void_p,
+                ctypes.POINTER(_GUID),
+                ctypes.POINTER(_GUID),
+                ctypes.POINTER(_GUID),
+                ctypes.POINTER(ctypes.c_ulong),
+                ctypes.c_void_p,
+                ctypes.POINTER(ctypes.c_ulong),
+            ]
+        if powr.PowerGetActiveScheme(None, ctypes.byref(scheme)) == 0 and scheme:
+            for reader in (powr.PowerReadACValue, powr.PowerReadDCValue):
+                value_type = ctypes.c_ulong()
+                size = ctypes.c_ulong(4)
+                value = ctypes.c_ulong(0)
+                rc = reader(
+                    None,
+                    scheme,
+                    ctypes.byref(POWER_VIDEO_SUBGROUP),
+                    ctypes.byref(POWER_VIDEO_TIMEOUT),
+                    ctypes.byref(value_type),
+                    ctypes.byref(value),
+                    ctypes.byref(size),
+                )
+                if rc == 0 and size.value == 4 and 0 <= int(value.value) <= 86400:
+                    timeout = int(value.value)
+                    break
+    except Exception:  # noqa: BLE001
+        pass
+    finally:
+        if scheme:
+            try:
+                ctypes.windll.kernel32.LocalFree(ctypes.cast(scheme, ctypes.c_void_p))
+            except Exception:  # noqa: BLE001
+                pass
+
+    with MONITOR_LOCK:
+        MONITOR_STATE["timeout"] = timeout
+        MONITOR_STATE["timeout_at"] = now
+    return timeout
+
+
 def monitor_off():
     if not user32:
         return False, "Только для Windows"
     try:
-        HWND_BROADCAST = 0xFFFF
-        WM_SYSCOMMAND = 0x0112
-        SC_MONITORPOWER = 0xF170
         user32.SendMessageW(HWND_BROADCAST, WM_SYSCOMMAND, SC_MONITORPOWER, 2)
+        with MONITOR_LOCK:
+            MONITOR_STATE["off_at"] = time.time()
+            MONITOR_STATE["on_at"] = 0.0
         return True, "Монитор выключен"
     except Exception as error:  # noqa: BLE001
         log.error("Не удалось выключить монитор: %s", error)
         return False, "Не удалось выключить монитор"
+
+
+def monitor_on():
+    if not user32:
+        return False, "Только для Windows"
+    try:
+        user32.SendMessageW(HWND_BROADCAST, WM_SYSCOMMAND, SC_MONITORPOWER, -1)
+        try:
+            user32.mouse_event.argtypes = [
+                ctypes.c_ulong,
+                ctypes.c_long,
+                ctypes.c_long,
+                ctypes.c_ulong,
+                ctypes.c_void_p,
+            ]
+            user32.mouse_event(MOUSEEVENTF_MOVE, 1, 0, 0, None)
+            time.sleep(0.05)
+            user32.mouse_event(MOUSEEVENTF_MOVE, -1, 0, 0, None)
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            kernel32 = ctypes.windll.kernel32
+            kernel32.SetThreadExecutionState.restype = ctypes.c_ulong
+            kernel32.SetThreadExecutionState.argtypes = [ctypes.c_ulong]
+            kernel32.SetThreadExecutionState(ES_CONTINUOUS | ES_DISPLAY_REQUIRED)
+            time.sleep(0.15)
+            kernel32.SetThreadExecutionState(ES_CONTINUOUS)
+        except Exception:  # noqa: BLE001
+            pass
+        with MONITOR_LOCK:
+            MONITOR_STATE["on_at"] = time.time()
+            MONITOR_STATE["off_at"] = 0.0
+        return True, "Монитор включён"
+    except Exception as error:  # noqa: BLE001
+        log.error("Не удалось включить монитор: %s", error)
+        return False, "Не удалось включить монитор"
+
+
+def monitor_state():
+    now = time.time()
+    idle = monitor_idle_seconds()
+    timeout = monitor_timeout_seconds()
+    last_input_at = now - idle
+    with MONITOR_LOCK:
+        off_at = float(MONITOR_STATE["off_at"])
+        on_at = float(MONITOR_STATE["on_at"])
+    if off_at and last_input_at > off_at + 0.75:
+        # Пользователь снова коснулся клавиатуры/мыши — экран уже горит.
+        off_at = 0.0
+        with MONITOR_LOCK:
+            MONITOR_STATE["off_at"] = 0.0
+    if off_at:
+        is_on = False
+    else:
+        since = max(last_input_at, on_at)
+        is_on = timeout <= 0 or (now - since) < timeout
+    return {
+        "monitor_on": bool(is_on),
+        "explicit_off": bool(off_at),
+        "idle_seconds": round(max(0.0, idle), 1),
+        "timeout_seconds": int(timeout),
+    }
 
 
 # --------------------------------------------------------------------------
@@ -974,6 +1153,15 @@ class SessionHandler(BaseHTTPRequestHandler):
             if path == "/monitor_off" and method == "POST":
                 ok, message = monitor_off()
                 self.send_json(200 if ok else 500, {"ok": ok, "message": message, "error": None if ok else message})
+                return
+
+            if path == "/monitor_on" and method == "POST":
+                ok, message = monitor_on()
+                self.send_json(200 if ok else 500, {"ok": ok, "message": message, "error": None if ok else message})
+                return
+
+            if path == "/monitor_state" and method == "GET":
+                self.send_json(200, {"ok": True, **monitor_state()})
                 return
 
             if path == "/screenshot" and method == "GET":

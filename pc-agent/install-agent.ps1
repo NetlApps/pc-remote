@@ -223,19 +223,20 @@ New-NetFirewallRule `
   -Profile Any `
   -RemoteAddress LocalSubnet | Out-Null
 
-# --- Разрешение для WG Tunnel --------------------------------------------
+# --- Обход блокировки LAN в WG Tunnel -------------------------------------
 
-# WG Tunnel ставит WFP-блокировку всего входящего трафика. Разрешение
-# добавляется отдельным WFP-фильтром с более высоким весом и не меняет
-# настройки самого WG Tunnel.
-$wfpScript = Join-Path $dir 'wfp-lan-permit.ps1'
-if (Test-Path $wfpScript) {
-  Write-Host 'Добавляю разрешение для WG Tunnel (если он установлен)…'
+# WG Tunnel 2.4.x при поднятом туннеле ставит в WFP два catch-all блок-фильтра
+# для IPv4, из-за чего телефон не видит агент. Встроенный «Allow LAN traffic»
+# в этой версии сломан, поэтому фоновый сторож удаляет только эти два фильтра
+# в подслойке WG. Туннель, служба и разрешающие фильтры WG не трогаются.
+$guardInstaller = Join-Path $dir 'install-lan-guard.ps1'
+if ((Test-Path $guardInstaller) -and (Get-Service -Name 'wgtunnel-daemon' -ErrorAction SilentlyContinue)) {
+  Write-Host 'Ставлю сторож локальной сети для WG Tunnel…'
   try {
-    & $wfpScript -Action Add | Out-Null
-    Write-Host '  Разрешение для локальной сети добавлено.' -ForegroundColor Green
+    & $guardInstaller | Out-Null
+    Write-Host '  Сторож LAN установлен (задача PCRemoteLanGuard).' -ForegroundColor Green
   } catch {
-    Write-Host ('  Не удалось добавить разрешение WFP: ' + $_.Exception.Message) -ForegroundColor Yellow
+    Write-Host ('  Не удалось установить сторож LAN: ' + $_.Exception.Message) -ForegroundColor Yellow
   }
 }
 
