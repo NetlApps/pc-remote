@@ -19,8 +19,10 @@
   permits and the IPv6 blocks intact.  The VPN tunnel itself is not touched.
 
   Only the exact filters named "WGTunnel-Block inbound all (IPv4)" and
-  "WGTunnel-Block outbound all (IPv4)" in WG's sublayer are removed.  If WG
-  changes those names, the guard will not delete anything.
+  "WGTunnel-Block outbound all (IPv4)" are removed.  WG generates a new
+  sublayer GUID on updates, so filters are matched by name instead of by
+  sublayer GUID.  If WG changes those names, the guard will not delete
+  anything.
 
   The guard pauses while WG's kill switch is enabled, so it never weakens
   kill-switch protection: it only restores LAN access when WG itself is
@@ -41,7 +43,6 @@ $ErrorActionPreference = 'Stop'
 $LogPath = Join-Path $PSScriptRoot 'lan_guard.log'
 $MutexName = 'Global\PcRemoteLanGuard'
 $KillSwitchCache = 'C:\ProgramData\wgtunnel\cache.properties'
-$WgSubLayer = [Guid]'6bf7cff1-91e4-4369-9d8b-ec46f3b71c36'
 $LayerConnectV4 = [Guid]'c38d57d1-05a7-4c33-904f-7fbceee60e82'
 $LayerRecvAcceptV4 = [Guid]'e1cd9fe7-f4b5-4273-96c0-592e487b8650'
 $BlockNames = @(
@@ -181,7 +182,6 @@ function Remove-WgIpv4Blocks {
                     for ($i = 0; $i -lt $returned; $i++) {
                         $ptr = [Runtime.InteropServices.Marshal]::ReadIntPtr($entries, $i * 8)
                         $f = [Runtime.InteropServices.Marshal]::PtrToStructure($ptr, [type][FWPM_FILTER0])
-                        if ($f.subLayerKey -ne $WgSubLayer) { continue }
                         if ($f.actionType -ne 0x1001) { continue }
                         if ($f.displayName -eq [IntPtr]::Zero) { continue }
                         $name = [Runtime.InteropServices.Marshal]::PtrToStringUni($f.displayName)
