@@ -106,7 +106,7 @@
     confirmOpen: false,
     appVisible: true,
     pollTimer: null,
-    currentVersion: '1.1.1',
+    currentVersion: '1.1.3',
     currentVersionCode: 0,
     shotOpen: false,
     shotBusy: false,
@@ -494,9 +494,6 @@
         stopBootWatch();
         showToast('ПК включился и на связи');
         vibrate(35);
-      }
-      if (sessionReady() && Date.now() - state.bt.lastAt > 45000) {
-        refreshBt(false);
       }
       if (sessionReady() && !state.monitor.known) {
         refreshMonitorState({ silent: true });
@@ -1172,7 +1169,7 @@
   // Bluetooth Audio Receiver
   // ------------------------------------------------------------------
 
-  async function refreshBt(manual) {
+  async function refreshBt(manual, action = 'check') {
     if (!state.online) {
       state.bt.checked = false;
       state.bt.error = '';
@@ -1187,7 +1184,7 @@
         state.settings,
         '/bt',
         'POST',
-        { action: 'status' },
+        { action },
         40000
       );
       state.bt.checked = true;
@@ -1197,8 +1194,16 @@
       state.bt.closeEnabled = Boolean(data.closeEnabled);
       state.bt.error = '';
       state.bt.lastAt = Date.now();
+      if (manual) {
+        showToast('Проверено', '', 1600);
+        vibrate(15);
+      }
     } catch (error) {
       state.bt.checked = false;
+      state.bt.running = false;
+      state.bt.state = '';
+      state.bt.openEnabled = false;
+      state.bt.closeEnabled = false;
       state.bt.error = error.message || 'Не удалось получить состояние';
       if (manual) showToast(state.bt.error, 'error', 4500);
     } finally {
@@ -1226,12 +1231,27 @@
       vibrate(25);
       showToast(data.message || (action === 'open' ? 'Соединение открыто' : 'Соединение закрыто'), '', 3200);
       state.bt.loading = false;
-      await refreshBt(false);
+      await refreshBt(false, 'status');
     } catch (error) {
       state.bt.loading = false;
       renderBt();
       showToast(error.message || 'Bluetooth-команда не выполнена', 'error', 5000);
     }
+  }
+
+  function formatBtState(raw) {
+    const text = String(raw || '').trim();
+    const match = text.match(/^\[([^\]]+)\]\s*(.+)$/);
+    if (match) {
+      const device = match[1].trim();
+      const status = match[2].trim();
+      if (/^connected$/i.test(status)) return 'Подключено: ' + device;
+      if (/^disconnected$/i.test(status)) return 'Не подключено: ' + device;
+      return device + ': ' + status;
+    }
+    if (/^connected$/i.test(text)) return 'Подключено';
+    if (/^disconnected$/i.test(text)) return 'Не подключено';
+    return text;
   }
 
   function renderBt() {
@@ -1251,16 +1271,20 @@
       className += ' checking';
     } else if (bt.error) {
       text = bt.error;
-      className += ' off';
+      className += ' error';
     } else if (!bt.checked) {
-      text = 'Нажмите, чтобы обновить';
+      text = 'Нажмите «Проверить»';
       className += ' off';
     } else if (!bt.running) {
       text = 'Приложение не запущено';
       className += ' off';
+    } else if (!bt.state) {
+      text = 'Приложение запущено';
+      className += ' off';
     } else {
-      text = bt.state || 'Готово';
-      const connected = /connected|подключ/i.test(text) && !/disconnected|отключ/i.test(text);
+      const raw = bt.state;
+      text = formatBtState(raw);
+      const connected = /connected|подключ/i.test(raw) && !/disconnected|отключ/i.test(raw);
       className += connected ? ' connected' : '';
     }
 
@@ -1269,7 +1293,21 @@
     els.btRefresh.classList.toggle('spinning', bt.loading);
     els.btRefresh.disabled = bt.loading || !state.online;
 
-    const busy = bt.loading || !state.online || !sessionReady();
+    if (els.btCheckedAt) {
+      if (bt.lastAt) {
+        const time = new Date(bt.lastAt).toLocaleTimeString('ru-RU', {
+          hour: '2-digit',
+          minute: '2-digit',
+        });
+        els.btCheckedAt.textContent =
+          (bt.error ? 'Последняя успешная проверка в ' : 'Проверено в ') + time;
+        els.btCheckedAt.hidden = false;
+      } else {
+        els.btCheckedAt.hidden = true;
+      }
+    }
+
+    const busy = bt.loading || !state.online || !sessionReady() || Boolean(bt.error);
     const openAllowed = busy ? false : !bt.running || bt.openEnabled;
     const closeAllowed = busy
       ? false
@@ -1408,6 +1446,25 @@
     els.tokenInput.value = settings.token || '';
   }
 
+  function trapSheetFocus(event) {
+    if (event.key !== 'Tab') return;
+    const focusables = Array.from(
+      els.settingsSheet.querySelectorAll(
+        'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])'
+      )
+    ).filter((element) => !element.hidden && element.offsetParent !== null);
+    if (!focusables.length) return;
+    const first = focusables[0];
+    const last = focusables[focusables.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  }
+
   function showSheet(open) {
     state.sheetOpen = open;
     if (open) {
@@ -1417,6 +1474,7 @@
         els.sheetBackdrop.classList.add('show');
         els.settingsSheet.classList.add('show');
       });
+      els.closeSettings.focus({ preventScroll: true });
     } else {
       els.sheetBackdrop.classList.remove('show');
       els.settingsSheet.classList.remove('show');
@@ -1424,6 +1482,9 @@
         if (!state.sheetOpen) {
           els.sheetBackdrop.hidden = true;
           els.settingsSheet.hidden = true;
+          if (!state.appsOpen && !state.hotkeysOpen) {
+            els.settingsBtn.focus({ preventScroll: true });
+          }
         }
       }, 340);
     }
@@ -1635,6 +1696,7 @@
       'hotkeysBtn',
       'muteBtn',
       'btState',
+      'btCheckedAt',
       'btRefresh',
       'btOpen',
       'btClose',
@@ -1678,6 +1740,7 @@
     els.settingsBtn.addEventListener('click', openSettings);
     els.closeSettings.addEventListener('click', () => showSheet(false));
     els.sheetBackdrop.addEventListener('click', () => showSheet(false));
+    els.settingsSheet.addEventListener('keydown', trapSheetFocus);
     els.saveSettings.addEventListener('click', saveSettingsFromForm);
     els.testBtn.addEventListener('click', testConnection);
     els.discoverBtn.addEventListener('click', discover);
@@ -1846,7 +1909,7 @@
     refreshNetworkInfo();
 
     try {
-      state.currentVersion = Bridge.getVersion() || '1.1.1';
+      state.currentVersion = Bridge.getVersion() || '1.1.3';
       state.currentVersionCode = Number(Bridge.getVersionCode() || 0) || 0;
       els.appVersion.textContent = state.currentVersion;
     } catch (error) {

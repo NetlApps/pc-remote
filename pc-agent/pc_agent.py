@@ -31,7 +31,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, urlencode, urlsplit
 from urllib.request import Request, urlopen
 
-APP_VERSION = "1.1.2"
+APP_VERSION = "1.1.3"
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
 LOG_PATH = os.path.join(BASE_DIR, "pc_agent.log")

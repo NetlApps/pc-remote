@@ -32,7 +32,7 @@ import zlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 
-APP_VERSION = "1.1.2"
+APP_VERSION = "1.1.3"
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
 LOG_PATH = os.path.join(BASE_DIR, "session_helper.log")
@@ -927,26 +927,34 @@ public class PcRemoteWin32 {
   [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
   [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
   [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr hWnd);
+  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+  [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
+  [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
+  [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left; public int Top; public int Right; public int Bottom; }
 }
 '@
 $action = '__ACTION__'
 $appId = '__APPID__'
 $windowName = 'Bluetooth Audio Receiver'
+$previousForeground = [IntPtr]::Zero
+$launched = $false
 
-function Find-CoreWindow {
-  $hwnd = [PcRemoteWin32]::FindWindow('Windows.UI.Core.CoreWindow', $windowName)
+function Find-BtWindow {
+  $hwnd = [PcRemoteWin32]::FindWindow('ApplicationFrameWindow', $windowName)
   if ($hwnd -eq [IntPtr]::Zero) {
-    $hwnd = [PcRemoteWin32]::FindWindow('ApplicationFrameWindow', $windowName)
+    $hwnd = [PcRemoteWin32]::FindWindow('Windows.UI.Core.CoreWindow', $windowName)
   }
   return $hwnd
 }
 
-$hwnd = Find-CoreWindow
+$hwnd = Find-BtWindow
 if ($hwnd -eq [IntPtr]::Zero -and $action -ne 'status') {
+  $previousForeground = [PcRemoteWin32]::GetForegroundWindow()
+  $launched = $true
   Start-Process explorer.exe -ArgumentList ('shell:AppsFolder\' + $appId)
-  for ($i = 0; $i -lt 20; $i++) {
-    Start-Sleep -Milliseconds 400
-    $hwnd = Find-CoreWindow
+  for ($i = 0; $i -lt 30; $i++) {
+    Start-Sleep -Milliseconds 300
+    $hwnd = Find-BtWindow
     if ($hwnd -ne [IntPtr]::Zero) { break }
   }
 }
@@ -971,10 +979,93 @@ if ($action -eq 'status' -and $isMinimized) {
   exit 0
 }
 
-if ($action -ne 'status') {
+if ($action -eq 'open' -or $action -eq 'close') {
   [PcRemoteWin32]::ShowWindow($hwnd, 9) | Out-Null
   [PcRemoteWin32]::SetForegroundWindow($hwnd) | Out-Null
   Start-Sleep -Milliseconds 700
+}
+
+if ($action -eq 'check') {
+  $restoreMinimized = $false
+
+  # UWP-приложение не отдаёт дерево UI Automation, пока окно свёрнуто.
+  # На время проверки показываем его без активации далеко за пределами
+  # экрана, затем возвращаем в свёрнутое состояние.
+  if ($isMinimized -or $launched) {
+    if ($previousForeground -eq [IntPtr]::Zero) {
+      $previousForeground = [PcRemoteWin32]::GetForegroundWindow()
+    }
+    $rect = New-Object PcRemoteWin32+RECT
+    $width = 420
+    $height = 520
+    if ([PcRemoteWin32]::GetWindowRect($hwnd, [ref]$rect)) {
+      $rectWidth = $rect.Right - $rect.Left
+      $rectHeight = $rect.Bottom - $rect.Top
+      if ($rectWidth -gt 0) { $width = $rectWidth }
+      if ($rectHeight -gt 0) { $height = $rectHeight }
+    }
+    [PcRemoteWin32]::ShowWindow($hwnd, 4) | Out-Null
+    if ([PcRemoteWin32]::IsIconic($hwnd)) {
+      [PcRemoteWin32]::ShowWindow($hwnd, 9) | Out-Null
+    }
+    [PcRemoteWin32]::SetWindowPos(
+      $hwnd,
+      [IntPtr]::Zero,
+      -32000,
+      -32000,
+      $width,
+      $height,
+      0x0054
+    ) | Out-Null
+    $restoreMinimized = $true
+    Start-Sleep -Milliseconds 450
+    if ($launched) {
+      Start-Sleep -Milliseconds 1200
+    }
+  }
+
+  try {
+    $win = [System.Windows.Automation.AutomationElement]::FromHandle($hwnd)
+    $stateElement = $null
+    $openButton = $null
+    $closeButton = $null
+    $attempts = if ($launched) { 20 } else { 10 }
+    for ($i = 0; $i -lt $attempts; $i++) {
+      $stateElement = $win.FindFirst(
+        [System.Windows.Automation.TreeScope]::Descendants,
+        (New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::AutomationIdProperty, 'ConnectionState'))
+      )
+      $openButton = $win.FindFirst(
+        [System.Windows.Automation.TreeScope]::Descendants,
+        (New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::AutomationIdProperty, '__OPENID__'))
+      )
+      $closeButton = $win.FindFirst(
+        [System.Windows.Automation.TreeScope]::Descendants,
+        (New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::AutomationIdProperty, '__CLOSEID__'))
+      )
+      if ($stateElement -or $openButton -or $closeButton) { break }
+      Start-Sleep -Milliseconds 250
+    }
+    $state = if ($stateElement) { $stateElement.Current.Name } else { '' }
+    [pscustomobject]@{
+      ok = $true
+      running = $true
+      state = $state
+      openEnabled = if ($openButton) { $openButton.Current.IsEnabled } else { $false }
+      closeEnabled = if ($closeButton) { $closeButton.Current.IsEnabled } else { $false }
+      button = ''
+      enabled = $false
+      launched = $launched
+    } | ConvertTo-Json -Compress
+  } finally {
+    if ($restoreMinimized) {
+      [PcRemoteWin32]::ShowWindow($hwnd, 6) | Out-Null
+      if ($launched -and $previousForeground -ne [IntPtr]::Zero) {
+        [PcRemoteWin32]::SetForegroundWindow($previousForeground) | Out-Null
+      }
+    }
+  }
+  exit 0
 }
 
 $win = [System.Windows.Automation.AutomationElement]::FromHandle($hwnd)
@@ -1036,8 +1127,8 @@ $newState = if ($stateElement) { $stateElement.Current.Name } else { $state }
 
 
 def bluetooth_control(action):
-    action = str(action or "status").strip().lower()
-    if action not in ("open", "close", "status"):
+    action = str(action or "check").strip().lower()
+    if action not in ("open", "close", "status", "check"):
         return False, "Неизвестное действие Bluetooth"
     script = (
         BT_SCRIPT.replace("__ACTION__", action)
@@ -1053,7 +1144,7 @@ def bluetooth_control(action):
         return False, "Не удалось разобрать ответ Bluetooth-приёмника"
     if not data.get("ok"):
         return False, data.get("error") or "Команда не выполнена"
-    if action == "status":
+    if action in ("status", "check"):
         return True, data
     state = data.get("state") or ""
     message = "Соединение открыто" if action == "open" else "Соединение закрыто"

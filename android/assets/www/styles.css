@@ -1027,6 +1027,10 @@ svg {
     column-gap: 9px;
   }
 
+  .action-title {
+    font-size: 12px;
+  }
+
   .action-sub {
     display: none;
   }
@@ -1279,8 +1283,13 @@ svg {
   align-items: center;
 }
 
+.bt-panel .panel-head > div {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
 .bt-state {
-  max-width: 250px;
+  max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1291,7 +1300,17 @@ svg {
 }
 
 .bt-state.off {
-  color: var(--muted-dim);
+  color: var(--muted);
+}
+
+.bt-state.error {
+  display: -webkit-box;
+  color: var(--red);
+  white-space: normal;
+  overflow: hidden;
+  text-overflow: clip;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 .bt-state.checking {
@@ -1299,11 +1318,23 @@ svg {
 }
 
 .bt-panel .refresh-btn {
-  width: 34px;
-  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  width: auto;
+  height: 44px;
+  padding: 0 12px;
   border-radius: 11px;
   background: rgba(148, 163, 184, 0.06);
   border: 1px solid var(--line);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.bt-panel .refresh-btn:disabled {
+  opacity: 0.5;
 }
 
 .bt-panel .refresh-btn svg {
@@ -1319,9 +1350,17 @@ svg {
 }
 
 .bt-actions .wide-btn {
+  min-height: 44px;
   padding: 12px 8px;
   font-size: 12px;
   line-height: 1.25;
+}
+
+.bt-checked-at {
+  margin: 9px 2px 0;
+  color: var(--muted);
+  font-size: 10.5px;
+  line-height: 1.35;
 }
 
 .session-hint {
