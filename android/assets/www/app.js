@@ -4,6 +4,7 @@
   const STORAGE_KEY = 'pcremote.settings.v1';
   const HOTKEYS_KEY = 'pcremote.hotkeys.v1';
   const UPDATE_KEY = 'pcremote.update.v1';
+  const SHUTDOWN_KEY = 'pcremote.shutdown.v1';
   const DEFAULTS = { ip: '', mac: '', port: 8765, token: '', name: '' };
   const hasNativeBridge = Boolean(window.PcBridge);
 
@@ -69,6 +70,13 @@
       danger: true,
       icon: '!',
     },
+    abort: {
+      title: 'Отменить выключение?',
+      text: 'Таймер будет снят, компьютер продолжит работать.',
+      button: 'Отменить',
+      danger: false,
+      icon: '↺',
+    },
     restart: {
       title: 'Перезагрузить ПК?',
       text: 'Компьютер перезагрузится. Через некоторое время он снова появится в сети.',
@@ -106,11 +114,13 @@
     confirmOpen: false,
     appVisible: true,
     pollTimer: null,
-    currentVersion: '1.1.3',
+    currentVersion: '1.1.4',
     currentVersionCode: 0,
     shotOpen: false,
     shotBusy: false,
     shotData: null,
+    shutdownChoice: 0,
+    shutdown: loadShutdown(),
     monitor: {
       known: false,
       on: true,
@@ -178,6 +188,85 @@
     } catch (error) {
       // Приватный режим WebView может запрещать запись — настройки останутся в памяти.
     }
+  }
+
+  function loadShutdown() {
+    try {
+      const raw = localStorage.getItem(SHUTDOWN_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        const at = Number(parsed.at) || 0;
+        if (at > Date.now()) {
+          return { at, seconds: Number(parsed.seconds) || 0 };
+        }
+      }
+      localStorage.removeItem(SHUTDOWN_KEY);
+    } catch (error) {
+      // Некорректная запись не должна мешать запуску.
+    }
+    return { at: 0, seconds: 0 };
+  }
+
+  function saveShutdown() {
+    try {
+      if (state.shutdown.at > Date.now()) {
+        localStorage.setItem(SHUTDOWN_KEY, JSON.stringify(state.shutdown));
+      } else {
+        localStorage.removeItem(SHUTDOWN_KEY);
+      }
+    } catch (error) {
+      // Таймер останется в памяти.
+    }
+  }
+
+  function formatDelay(seconds) {
+    const total = Math.max(0, Math.round(Number(seconds) || 0));
+    if (total < 60) return total + ' с';
+    const minutes = Math.floor(total / 60);
+    if (minutes < 60) return minutes + ' мин';
+    const hours = Math.floor(minutes / 60);
+    const rest = minutes % 60;
+    return rest ? hours + ' ч ' + rest + ' мин' : hours + ' ч';
+  }
+
+  function versionAtLeast(actual, required) {
+    const left = String(actual || '').split('.').map((part) => parseInt(part, 10) || 0);
+    const right = String(required || '').split('.').map((part) => parseInt(part, 10) || 0);
+    for (let index = 0; index < Math.max(left.length, right.length); index += 1) {
+      const a = left[index] || 0;
+      const b = right[index] || 0;
+      if (a > b) return true;
+      if (a < b) return false;
+    }
+    return true;
+  }
+
+  function agentSupportsShutdownTimer() {
+    return Boolean(state.info && versionAtLeast(state.info.agent_version, '1.1.4'));
+  }
+
+  function setShutdownTimer(seconds) {
+    const delay = Math.max(1, Math.min(86400, Math.round(Number(seconds) || 0)));
+    state.shutdown = { at: Date.now() + delay * 1000, seconds: delay };
+    saveShutdown();
+    renderShutdownTimer();
+  }
+
+  function clearShutdownTimer() {
+    state.shutdown = { at: 0, seconds: 0 };
+    saveShutdown();
+    renderShutdownTimer();
+  }
+
+  function renderShutdownTimer() {
+    if (!els.shutdownStatus) return;
+    const left = state.shutdown.at - Date.now();
+    if (left <= 0) {
+      els.shutdownStatus.hidden = true;
+      return;
+    }
+    els.shutdownStatus.hidden = false;
+    els.shutdownStatusText.textContent = 'Выключение через ' + formatDelay(Math.ceil(left / 1000));
   }
 
   function normalizeMac(value) {
@@ -694,6 +783,16 @@
     els.confirmIcon.className = 'modal-icon' + (config.danger ? '' : ' primary');
     els.okConfirm.textContent = config.button;
     els.okConfirm.className = config.danger ? 'danger-btn' : 'primary-btn';
+    els.shutdownTimer.hidden = action !== 'shutdown';
+    if (action === 'shutdown') {
+      resetShutdownPicker();
+      const timerReady = agentSupportsShutdownTimer();
+      els.shutdownTimerNote.hidden = timerReady;
+      document.querySelectorAll('[data-delay]').forEach((button) => {
+        button.disabled = Number(button.dataset.delay) > 0 && !timerReady;
+      });
+      els.shutdownMinutes.disabled = !timerReady;
+    }
 
     els.modalBackdrop.hidden = false;
     els.confirmModal.hidden = false;
@@ -701,6 +800,40 @@
       els.modalBackdrop.classList.add('show');
       els.confirmModal.classList.add('show');
     });
+  }
+
+  function resetShutdownPicker() {
+    state.shutdownChoice = 0;
+    if (els.shutdownMinutes) els.shutdownMinutes.value = '';
+    document.querySelectorAll('[data-delay]').forEach((button) => {
+      button.classList.toggle('is-active', Number(button.dataset.delay) === 0);
+    });
+    updateShutdownConfirm();
+  }
+
+  function selectShutdownDelay(seconds) {
+    state.shutdownChoice = Math.max(0, Math.min(86400, Math.round(Number(seconds) || 0)));
+    if (els.shutdownMinutes) els.shutdownMinutes.value = '';
+    document.querySelectorAll('[data-delay]').forEach((button) => {
+      button.classList.toggle(
+        'is-active',
+        Number(button.dataset.delay) === state.shutdownChoice
+      );
+    });
+    updateShutdownConfirm();
+  }
+
+  function updateShutdownConfirm() {
+    if (state.pendingAction !== 'shutdown') return;
+    const seconds = state.shutdownChoice;
+    if (seconds > 0) {
+      els.confirmText.textContent =
+        'ПК выключится через ' + formatDelay(seconds) + '. Все программы будут закрыты.';
+      els.okConfirm.textContent = 'Запланировать';
+    } else {
+      els.confirmText.textContent = CONFIRM.shutdown.text;
+      els.okConfirm.textContent = CONFIRM.shutdown.button;
+    }
   }
 
   function hideConfirm() {
@@ -720,10 +853,18 @@
     state.busy = true;
     render();
     try {
-      const result = await apiRequest(state.settings, '/' + action, 'POST');
+      const delaySeconds =
+        action === 'shutdown' ? Math.max(0, Number(state.shutdownChoice) || 0) : 0;
+      const scheduled = action === 'shutdown' && delaySeconds > 0;
+      const endpoint = scheduled ? '/shutdown_timer' : '/' + action;
+      const body = scheduled ? { seconds: delaySeconds } : null;
+      const result = await apiRequest(state.settings, endpoint, 'POST', body);
       vibrate(30);
       showToast(result.message || 'Команда выполнена');
-      if (action === 'shutdown' || action === 'sleep') {
+      if (scheduled) {
+        setShutdownTimer(delaySeconds);
+      } else if (action === 'shutdown' || action === 'sleep') {
+        if (action === 'shutdown') clearShutdownTimer();
         setTimeout(() => {
           if (state.online) {
             state.online = false;
@@ -732,6 +873,8 @@
             render();
           }
         }, 3500);
+      } else if (action === 'abort') {
+        clearShutdownTimer();
       }
     } catch (error) {
       showToast(error.message || 'Не удалось выполнить команду', 'error', 4500);
@@ -797,6 +940,267 @@
   // Скриншот
   // ------------------------------------------------------------------
 
+  const SHOT_MAX_ZOOM = 10;
+  const SHOT_DOUBLE_TAP_SCALE = 2.5;
+  const shotView = {
+    scale: 1,
+    x: 0,
+    y: 0,
+    pointers: new Map(),
+    pinch: null,
+    pan: null,
+    lastTap: 0,
+    lastTapX: 0,
+    lastTapY: 0,
+  };
+
+  function shotCenter() {
+    const rect = els.shotFrame.getBoundingClientRect();
+    return {
+      cx: rect.left + rect.width / 2,
+      cy: rect.top + rect.height / 2,
+    };
+  }
+
+  function shotClamp() {
+    const baseW = els.shotImage.offsetWidth || 0;
+    const baseH = els.shotImage.offsetHeight || 0;
+    if (!baseW || !baseH) return;
+    const maxX = Math.max(0, (baseW * shotView.scale - els.shotFrame.clientWidth) / 2);
+    const maxY = Math.max(0, (baseH * shotView.scale - els.shotFrame.clientHeight) / 2);
+    shotView.x = Math.min(maxX, Math.max(-maxX, shotView.x));
+    shotView.y = Math.min(maxY, Math.max(-maxY, shotView.y));
+  }
+
+  function shotApply() {
+    if (!els.shotImage) return;
+    els.shotImage.style.transform =
+      'translate3d(' +
+      shotView.x.toFixed(2) +
+      'px, ' +
+      shotView.y.toFixed(2) +
+      'px, 0) scale(' +
+      shotView.scale.toFixed(3) +
+      ')';
+    const rounded = Math.round(shotView.scale * 10) / 10;
+    const label = String(rounded).replace('.', ',') + '×';
+    els.shotZoomLevel.textContent = label;
+    const atMin = shotView.scale <= 1.001;
+    const atMax = shotView.scale >= SHOT_MAX_ZOOM - 0.001;
+    els.shotZoomOut.disabled = atMin;
+    els.shotZoomIn.disabled = atMax;
+    els.shotZoomReset.disabled = atMin;
+    els.shotZoomReset.setAttribute('aria-label', 'Сбросить масштаб, сейчас ' + label);
+    els.shotFrame.classList.toggle('zoomed', !atMin);
+  }
+
+  function shotReset(apply = true) {
+    shotView.scale = 1;
+    shotView.x = 0;
+    shotView.y = 0;
+    shotView.pointers.clear();
+    shotView.pinch = null;
+    shotView.pan = null;
+    shotView.lastTap = 0;
+    if (apply && els.shotImage) {
+      els.shotImage.style.transform = '';
+      shotApply();
+    }
+  }
+
+  function shotZoomAt(nextScale, clientX, clientY) {
+    const scale = Math.min(SHOT_MAX_ZOOM, Math.max(1, nextScale));
+    if (Math.abs(scale - shotView.scale) < 0.001) return;
+    const center = shotCenter();
+    const fx = clientX - center.cx;
+    const fy = clientY - center.cy;
+    const ratio = scale / shotView.scale;
+    shotView.x = fx - (fx - shotView.x) * ratio;
+    shotView.y = fy - (fy - shotView.y) * ratio;
+    shotView.scale = scale;
+    shotClamp();
+    shotApply();
+  }
+
+  function shotZoomCenter(factor) {
+    const center = shotCenter();
+    shotZoomAt(shotView.scale * factor, center.cx, center.cy);
+  }
+
+  function shotPointerPoints() {
+    return Array.from(shotView.pointers.values());
+  }
+
+  function shotStartPinch() {
+    const points = shotPointerPoints();
+    if (points.length < 2) return;
+    const midX = (points[0].x + points[1].x) / 2;
+    const midY = (points[0].y + points[1].y) / 2;
+    const dx = points[0].x - points[1].x;
+    const dy = points[0].y - points[1].y;
+    const center = shotCenter();
+    shotView.pan = null;
+    shotView.pinch = {
+      startDist: Math.max(1, Math.hypot(dx, dy)),
+      startScale: shotView.scale,
+      anchorX: (midX - center.cx - shotView.x) / shotView.scale,
+      anchorY: (midY - center.cy - shotView.y) / shotView.scale,
+    };
+    shotView.lastTap = 0;
+  }
+
+  function onShotPointerDown(event) {
+    if (els.shotImage.hidden) return;
+    if (event.target.closest && event.target.closest('.shot-zoom-bar')) return;
+    if (event.pointerType === 'mouse' && event.button !== 0) return;
+    if (shotView.pointers.size >= 2) return;
+    event.preventDefault();
+    try {
+      els.shotFrame.setPointerCapture(event.pointerId);
+    } catch (error) {
+      // Захват не критичен.
+    }
+    shotView.pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    if (shotView.pointers.size === 1) {
+      shotView.pinch = null;
+      shotView.pan = {
+        id: event.pointerId,
+        startX: event.clientX,
+        startY: event.clientY,
+        startTx: shotView.x,
+        startTy: shotView.y,
+        moved: false,
+        eligible: true,
+        startedAt: Date.now(),
+      };
+    } else {
+      shotStartPinch();
+    }
+  }
+
+  function onShotPointerMove(event) {
+    const point = shotView.pointers.get(event.pointerId);
+    if (!point) return;
+    point.x = event.clientX;
+    point.y = event.clientY;
+    event.preventDefault();
+    if (shotView.pinch && shotView.pointers.size >= 2) {
+      const points = shotPointerPoints();
+      const dx = points[0].x - points[1].x;
+      const dy = points[0].y - points[1].y;
+      const midX = (points[0].x + points[1].x) / 2;
+      const midY = (points[0].y + points[1].y) / 2;
+      const center = shotCenter();
+      const nextScale = Math.min(
+        SHOT_MAX_ZOOM,
+        Math.max(
+          1,
+          shotView.pinch.startScale *
+            (Math.hypot(dx, dy) / shotView.pinch.startDist)
+        )
+      );
+      shotView.scale = nextScale;
+      shotView.x = midX - center.cx - shotView.pinch.anchorX * nextScale;
+      shotView.y = midY - center.cy - shotView.pinch.anchorY * nextScale;
+      shotClamp();
+      shotApply();
+      return;
+    }
+    if (shotView.pan && shotView.pan.id === event.pointerId) {
+      const dx = event.clientX - shotView.pan.startX;
+      const dy = event.clientY - shotView.pan.startY;
+      if (Math.hypot(dx, dy) > 6) shotView.pan.moved = true;
+      if (shotView.scale > 1.001) {
+        shotView.x = shotView.pan.startTx + dx;
+        shotView.y = shotView.pan.startTy + dy;
+        shotClamp();
+        shotApply();
+      }
+    }
+  }
+
+  function onShotPointerEnd(event, cancelled) {
+    if (!shotView.pointers.delete(event.pointerId)) return;
+    try {
+      els.shotFrame.releasePointerCapture(event.pointerId);
+    } catch (error) {
+      // Захват уже снят.
+    }
+    if (shotView.pointers.size === 1) {
+      if (shotView.pinch) {
+        const points = shotPointerPoints();
+        const pointerId = Array.from(shotView.pointers.keys())[0];
+        shotView.pinch = null;
+        shotView.pan = {
+          id: pointerId,
+          startX: points[0].x,
+          startY: points[0].y,
+          startTx: shotView.x,
+          startTy: shotView.y,
+          moved: true,
+          eligible: false,
+          startedAt: Date.now(),
+        };
+      }
+      return;
+    }
+    if (shotView.pointers.size > 0) return;
+    const pan = shotView.pan;
+    shotView.pinch = null;
+    shotView.pan = null;
+    if (
+      !cancelled &&
+      pan &&
+      pan.id === event.pointerId &&
+      pan.eligible &&
+      !pan.moved &&
+      Date.now() - pan.startedAt < 320
+    ) {
+      handleShotTap(event.clientX, event.clientY);
+    }
+    if (shotView.scale <= 1.02) {
+      shotReset();
+    } else {
+      shotClamp();
+      shotApply();
+    }
+  }
+
+  function handleShotTap(x, y) {
+    const now = Date.now();
+    const doubleTap =
+      now - shotView.lastTap < 360 &&
+      Math.hypot(x - shotView.lastTapX, y - shotView.lastTapY) < 44;
+    if (!doubleTap) {
+      shotView.lastTap = now;
+      shotView.lastTapX = x;
+      shotView.lastTapY = y;
+      return;
+    }
+    shotView.lastTap = 0;
+    if (shotView.scale > 1.02) {
+      shotReset();
+    } else {
+      shotZoomAt(SHOT_DOUBLE_TAP_SCALE, x, y);
+    }
+    vibrate(10);
+  }
+
+  function onShotWheel(event) {
+    if (els.shotImage.hidden) return;
+    event.preventDefault();
+    const factor = Math.exp(-event.deltaY * 0.0015);
+    shotZoomAt(shotView.scale * factor, event.clientX, event.clientY);
+  }
+
+  function onShotImageLoad() {
+    if (!state.shotOpen) return;
+    els.shotLoader.hidden = true;
+    els.shotImage.hidden = false;
+    els.shotZoomBar.hidden = false;
+    shotReset();
+  }
+
   function openScreenshot() {
     if (!sessionReady()) {
       showToast('Помощник сессии не запущен', 'error');
@@ -804,8 +1208,11 @@
     }
     state.shotOpen = true;
     state.shotData = null;
+    shotReset(false);
+    els.shotImage.style.transform = '';
     els.shotImage.hidden = true;
     els.shotImage.removeAttribute('src');
+    els.shotZoomBar.hidden = true;
     els.shotLoader.hidden = false;
     els.shotMeta.textContent = 'Делаю снимок…';
     els.shotBackdrop.hidden = false;
@@ -820,6 +1227,8 @@
   function closeScreenshot() {
     state.shotOpen = false;
     state.shotData = null;
+    shotReset(false);
+    els.shotZoomBar.hidden = true;
     els.shotBackdrop.classList.remove('show');
     els.shotModal.classList.remove('show');
     setTimeout(() => {
@@ -833,8 +1242,11 @@
   async function loadScreenshot() {
     if (state.shotBusy) return;
     state.shotBusy = true;
+    shotReset(false);
+    els.shotImage.style.transform = '';
     els.shotImage.hidden = true;
     els.shotImage.removeAttribute('src');
+    els.shotZoomBar.hidden = true;
     els.shotLoader.hidden = false;
     els.shotMeta.textContent = 'Делаю снимок…';
     renderShotButtons();
@@ -842,15 +1254,14 @@
       const data = await apiRequest(state.settings, '/screenshot', 'GET', null, 30000);
       if (!data || !data.image) throw new Error('Снимок не получен');
       state.shotData = data;
-      els.shotImage.src = 'data:' + (data.mime || 'image/png') + ';base64,' + data.image;
-      els.shotImage.hidden = false;
       els.shotMeta.textContent =
         (data.dimensions || 'экран ПК') + (data.size ? ' · ' + formatBytes(data.size) : '');
-      els.shotLoader.hidden = true;
+      els.shotImage.src = 'data:' + (data.mime || 'image/png') + ';base64,' + data.image;
       vibrate(18);
     } catch (error) {
       els.shotMeta.textContent = error.message || 'Не удалось сделать снимок';
       els.shotLoader.hidden = true;
+      els.shotZoomBar.hidden = true;
       showToast(error.message || 'Не удалось сделать снимок', 'error', 4500);
     } finally {
       state.shotBusy = false;
@@ -1665,6 +2076,8 @@
       'powerBtn',
       'powerLabel',
       'powerHint',
+      'shutdownStatus',
+      'shutdownStatusText',
       'settingsBtn',
       'sheetBackdrop',
       'settingsSheet',
@@ -1683,6 +2096,9 @@
       'confirmIcon',
       'confirmTitle',
       'confirmText',
+      'shutdownTimer',
+      'shutdownMinutes',
+      'shutdownTimerNote',
       'cancelConfirm',
       'okConfirm',
       'toast',
@@ -1708,6 +2124,12 @@
       'shotClose',
       'shotRefresh',
       'shotMonitorOff',
+      'shotFrame',
+      'shotZoomBar',
+      'shotZoomOut',
+      'shotZoomIn',
+      'shotZoomReset',
+      'shotZoomLevel',
       'appsBackdrop',
       'appsSheet',
       'closeApps',
@@ -1782,6 +2204,53 @@
     els.shotBackdrop.addEventListener('click', closeScreenshot);
     els.shotRefresh.addEventListener('click', loadScreenshot);
     els.shotMonitorOff.addEventListener('click', toggleMonitor);
+    els.shotFrame.addEventListener('pointerdown', onShotPointerDown);
+    els.shotFrame.addEventListener('pointermove', onShotPointerMove);
+    els.shotFrame.addEventListener('pointerup', (event) => onShotPointerEnd(event, false));
+    els.shotFrame.addEventListener('pointercancel', (event) => onShotPointerEnd(event, true));
+    els.shotFrame.addEventListener('wheel', onShotWheel, { passive: false });
+    els.shotImage.addEventListener('load', onShotImageLoad);
+    els.shotImage.addEventListener('error', () => {
+      if (!state.shotOpen) return;
+      els.shotLoader.hidden = true;
+      els.shotZoomBar.hidden = true;
+      els.shotMeta.textContent = 'Не удалось показать снимок';
+    });
+    els.shotZoomIn.addEventListener('click', () => {
+      shotZoomCenter(1.5);
+      vibrate(8);
+    });
+    els.shotZoomOut.addEventListener('click', () => {
+      shotZoomCenter(1 / 1.5);
+      vibrate(8);
+    });
+    els.shotZoomReset.addEventListener('click', () => {
+      shotReset();
+      vibrate(8);
+    });
+
+    els.shutdownStatus.addEventListener('click', () => openConfirm('abort'));
+    document.querySelectorAll('[data-delay]').forEach((button) => {
+      button.addEventListener('click', () => {
+        selectShutdownDelay(Number(button.dataset.delay) || 0);
+        vibrate(8);
+      });
+    });
+    els.shutdownMinutes.addEventListener('input', () => {
+      const minutes = Math.max(0, Math.min(1440, Math.floor(Number(els.shutdownMinutes.value) || 0)));
+      state.shutdownChoice = minutes * 60;
+      document.querySelectorAll('[data-delay]').forEach((button) => {
+        button.classList.remove('is-active');
+      });
+      updateShutdownConfirm();
+    });
+    els.shutdownMinutes.addEventListener('blur', () => {
+      if (!els.shutdownMinutes.value) return;
+      const minutes = Math.max(1, Math.min(1440, Math.floor(Number(els.shutdownMinutes.value) || 1)));
+      els.shutdownMinutes.value = String(minutes);
+      state.shutdownChoice = minutes * 60;
+      updateShutdownConfirm();
+    });
 
     els.closeApps.addEventListener('click', closeAppsSheet);
     els.appsBackdrop.addEventListener('click', closeAppsSheet);
@@ -1907,9 +2376,10 @@
     cacheElements();
     bindEvents();
     refreshNetworkInfo();
+    renderShutdownTimer();
 
     try {
-      state.currentVersion = Bridge.getVersion() || '1.1.3';
+      state.currentVersion = Bridge.getVersion() || '1.1.4';
       state.currentVersionCode = Number(Bridge.getVersionCode() || 0) || 0;
       els.appVersion.textContent = state.currentVersion;
     } catch (error) {
@@ -1929,6 +2399,17 @@
       refreshStatus({ silent: true });
       refreshMonitorState({ silent: true });
     }, 10000);
+
+    setInterval(() => {
+      if (!state.shutdown.at) return;
+      if (state.shutdown.at <= Date.now()) {
+        state.shutdown = { at: 0, seconds: 0 };
+        saveShutdown();
+        renderShutdownTimer();
+        return;
+      }
+      renderShutdownTimer();
+    }, 1000);
 
     if (hasNativeBridge && Date.now() - loadUpdateCheckTime() > 6 * 60 * 60 * 1000) {
       setTimeout(() => checkUpdates(false), 2200);

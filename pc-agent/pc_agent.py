@@ -31,7 +31,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, urlencode, urlsplit
 from urllib.request import Request, urlopen
 
-APP_VERSION = "1.1.3"
+APP_VERSION = "1.1.4"
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
 LOG_PATH = os.path.join(BASE_DIR, "pc_agent.log")
@@ -395,6 +395,42 @@ def clear_failures(ip_text):
 # --------------------------------------------------------------------------
 
 
+def format_delay(seconds):
+    seconds = max(0, int(seconds))
+    if seconds < 60:
+        return f"{seconds} сек"
+    minutes = seconds // 60
+    if minutes < 60:
+        return f"{minutes} мин"
+    hours = minutes // 60
+    rest = minutes % 60
+    return f"{hours} ч {rest} мин" if rest else f"{hours} ч"
+
+
+def schedule_shutdown(seconds):
+    seconds = max(1, min(int(seconds), 86400))
+    if DRY_RUN:
+        log.info("[dry-run] shutdown /s /t %s", seconds)
+        return True, f"ПК выключится через {format_delay(seconds)}"
+    try:
+        result = subprocess.run(
+            ["shutdown.exe", "/s", "/t", str(seconds)],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            creationflags=CREATE_NO_WINDOW,
+        )
+        if result.returncode != 0:
+            detail = (result.stdout or result.stderr or "").strip()
+            log.warning("Выключение не запланировано: %s", detail)
+            return False, "Windows не приняла команду выключения"
+        log.info("Выключение запланировано через %s сек.", seconds)
+        return True, f"ПК выключится через {format_delay(seconds)}"
+    except Exception as error:  # noqa: BLE001
+        log.error("Не удалось запланировать выключение: %s", error)
+        return False, f"Не удалось запланировать выключение: {error}"
+
+
 def perform(action):
     spec = ACTIONS.get(action)
     if not spec:
@@ -402,6 +438,24 @@ def perform(action):
     if DRY_RUN:
         log.info("[dry-run] команда %s: %s", action, spec["args"])
         return True, spec["message"]
+    if action == "abort":
+        # shutdown /a сообщает кодом возврата, было ли что отменять.
+        try:
+            result = subprocess.run(
+                spec["args"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                creationflags=CREATE_NO_WINDOW,
+            )
+            if result.returncode == 0:
+                return True, spec["message"]
+            detail = (result.stdout or result.stderr or "").strip()
+            log.warning("Отмена выключения не удалась: %s", detail)
+            return False, "Нет запланированного выключения"
+        except Exception as error:  # noqa: BLE001
+            log.error("Ошибка отмены выключения: %s", error)
+            return False, "Не удалось отменить выключение"
     if action == "lock" and IS_SYSTEM:
         # Агент работает как SYSTEM и не может заблокировать сессию пользователя
         # напрямую, поэтому запускаем заранее созданную задачу в сессии пользователя.
@@ -567,6 +621,36 @@ class AgentHandler(BaseHTTPRequestHandler):
 
         if path == "/session" and method == "GET":
             self.send_json(200, {"ok": True, "session": session_health(force=True)})
+            return
+
+        if method == "POST" and path == "/shutdown_timer":
+            try:
+                body = self.read_json_body()
+            except ValueError as error:
+                self.send_json(400, {"ok": False, "error": str(error)})
+                return
+            try:
+                seconds = int(body.get("seconds") or 0)
+            except (TypeError, ValueError):
+                seconds = 0
+            if seconds < 1 or seconds > 86400:
+                self.send_json(
+                    400,
+                    {"ok": False, "error": "Укажите задержку от 1 секунды до 24 часов"},
+                )
+                return
+            log.info("Отложенное выключение через %s сек. с %s", seconds, client)
+            ok, message = schedule_shutdown(seconds)
+            self.send_json(
+                200 if ok else 500,
+                {
+                    "ok": ok,
+                    "action": "shutdown_timer",
+                    "seconds": seconds,
+                    "message": message,
+                    "error": None if ok else message,
+                },
+            )
             return
 
         if method == "POST" and path.lstrip("/") in ACTIONS:

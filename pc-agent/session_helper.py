@@ -32,7 +32,7 @@ import zlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 
-APP_VERSION = "1.1.3"
+APP_VERSION = "1.1.4"
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
 LOG_PATH = os.path.join(BASE_DIR, "session_helper.log")
@@ -597,7 +597,7 @@ def encode_png(width, height, rgb):
     )
 
 
-def capture_screen_png(max_side=1600):
+def capture_screen_png(max_side=3840):
     if not IS_WINDOWS:
         return False, "Только для Windows"
 
@@ -720,14 +720,10 @@ def capture_screen_png(max_side=1600):
 
     bgra = buffer.raw
     rgb = bytearray(tw * th * 3)
-    source = 0
-    target = 0
-    for _ in range(tw * th):
-        rgb[target] = bgra[source + 2]
-        rgb[target + 1] = bgra[source + 1]
-        rgb[target + 2] = bgra[source]
-        source += 4
-        target += 3
+    # Slice assignment выполняется в C и в разы быстрее по-пиксельного цикла.
+    rgb[0::3] = bgra[2::4]
+    rgb[1::3] = bgra[1::4]
+    rgb[2::3] = bgra[0::4]
 
     data = encode_png(tw, th, rgb)
     log.info("Скриншот создан: %sx%s, %s байт", tw, th, len(data))

@@ -77,6 +77,19 @@
         </button>
       </div>
       <p id="powerHint" class="power-hint">Отправьте сигнал Wake-on-LAN</p>
+      <button id="shutdownStatus" class="shutdown-status" type="button" hidden>
+        <span class="shutdown-status-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12.5" r="8"></circle>
+            <path d="M12 8v4.6l3 1.8"></path>
+          </svg>
+        </span>
+        <span class="shutdown-status-body">
+          <strong id="shutdownStatusText">Выключение через 15 мин</strong>
+          <small>Нажмите, чтобы отменить</small>
+        </span>
+        <span class="shutdown-status-x" aria-hidden="true">✕</span>
+      </button>
     </section>
 
     <section class="actions" aria-label="Команды">
@@ -249,7 +262,7 @@
       <p id="btCheckedAt" class="bt-checked-at" hidden></p>
     </section>
 
-    <p class="footer">Домашняя сеть · приложение <span id="appVersion">1.1.3</span></p>
+    <p class="footer">Домашняя сеть · приложение <span id="appVersion">1.1.4</span></p>
   </main>
 
   <div id="sheetBackdrop" class="backdrop" hidden></div>
@@ -304,7 +317,7 @@
       <div id="updateBox" class="settings-section">
         <div class="settings-section-head">
           <h3>Обновления</h3>
-          <span id="currentVersion" class="version-pill">1.1.3</span>
+          <span id="currentVersion" class="version-pill">1.1.4</span>
         </div>
         <p id="updateStatus" class="sheet-note">Проверка выполняется автоматически при запуске</p>
         <button id="checkUpdatesBtn" class="wide-btn ghost" type="button">Проверить обновления</button>
@@ -380,6 +393,24 @@
     <div id="confirmIcon" class="modal-icon" aria-hidden="true">!</div>
     <h3 id="confirmTitle">Выключить ПК?</h3>
     <p id="confirmText">Все программы будут закрыты.</p>
+    <div id="shutdownTimer" class="shutdown-timer" hidden>
+      <div class="shutdown-timer-label">Когда выключить</div>
+      <div class="timer-chips" role="group" aria-label="Задержка выключения">
+        <button class="timer-chip is-active" type="button" data-delay="0">Сейчас</button>
+        <button class="timer-chip" type="button" data-delay="300">5 мин</button>
+        <button class="timer-chip" type="button" data-delay="900">15 мин</button>
+        <button class="timer-chip" type="button" data-delay="1800">30 мин</button>
+        <button class="timer-chip" type="button" data-delay="3600">1 час</button>
+      </div>
+      <label class="timer-custom" for="shutdownMinutes">
+        <span>Своё время</span>
+        <span class="timer-input">
+          <input id="shutdownMinutes" type="number" min="1" max="1440" inputmode="numeric" placeholder="—">
+          <span>мин</span>
+        </span>
+      </label>
+      <p id="shutdownTimerNote" class="shutdown-timer-note" hidden>Таймер доступен после обновления агента на ПК до 1.1.4.</p>
+    </div>
     <div class="modal-actions">
       <button id="cancelConfirm" class="ghost-btn" type="button">Отмена</button>
       <button id="okConfirm" class="danger-btn" type="button">Выключить</button>
@@ -396,13 +427,19 @@
       <button id="shotClose" class="icon-btn small" type="button" aria-label="Закрыть">✕</button>
     </div>
     <div id="shotFrame" class="shot-frame">
-      <img id="shotImage" class="shot-image" alt="Снимок экрана ПК" hidden>
+      <img id="shotImage" class="shot-image" alt="Снимок экрана ПК" draggable="false" hidden>
       <div id="shotLoader" class="shot-loader">Снимаю экран…</div>
+      <div id="shotZoomBar" class="shot-zoom-bar" hidden>
+        <button id="shotZoomOut" class="shot-zoom-btn" type="button" aria-label="Уменьшить масштаб">−</button>
+        <button id="shotZoomReset" class="shot-zoom-btn zoom-level" type="button" aria-label="Сбросить масштаб"><span id="shotZoomLevel">1×</span></button>
+        <button id="shotZoomIn" class="shot-zoom-btn" type="button" aria-label="Увеличить масштаб">+</button>
+      </div>
     </div>
     <div class="shot-actions">
       <button id="shotRefresh" class="ghost-btn" type="button">Обновить</button>
       <button id="shotMonitorOff" class="primary-btn" type="button">Выключить монитор</button>
     </div>
+    <p class="shot-hint">Сведите два пальца или дважды коснитесь снимка, чтобы приблизить</p>
   </section>
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
